@@ -43,7 +43,8 @@ int main(int argc, char **argv) {
         } else {
             out_fname = out_filename.c_str();
         }
-        PCAPFile pcapFile = PCAPFile(filename.c_str(), out_fname, ips, (uint16_t) port, protocols);
+#pragma GCC diagnostic push
+        PCAPFile pcapFile = PCAPFile(filename.c_str(), out_fname, ips, static_cast<uint16_t>(port), protocols);
         while (pcapFile.Next() != -1) {}
     } catch (std::exception &ex) {
         std::cout << ex.what() << std::endl;
