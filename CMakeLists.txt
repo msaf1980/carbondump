@@ -50,6 +50,10 @@ if(DEFINED ENV{DEVENV})
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 foreach(dir IN LISTS SUB_DIRS)
     message("ADD ${dir}")
     add_subdirectory(${dir})

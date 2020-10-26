@@ -13,3 +13,10 @@ CPMAddPackage(
   VERSION 1.9.1
   DOWNLOAD_ONLY True
 )
+
+CPMAddPackage(
+  NAME Catch2
+  GITHUB_REPOSITORY catchorg/Catch2
+  VERSION 2.13.2
+  DOWNLOAD_ONLY True
+)

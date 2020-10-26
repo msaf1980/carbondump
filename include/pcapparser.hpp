@@ -4,13 +4,12 @@
 #include <stdio.h>
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 enum Protocol { TCP = 0, UDP };
 
 enum OutMode { PACKET = 0, METRIC = 1 };
-
-extern OutMode out_mode;
 
 #define READ_BUF_SIZE 65572
 
@@ -32,24 +31,42 @@ typedef struct pcaprec_hdr_s {
     uint32_t orig_len; /* actual length of packet */
 } pcaprec_hdr_t;
 
+typedef struct {
+    bool udp;
+    struct timeval ts;
+    char *message;
+    std::string src_dst;
+} packet;
+
 class PCAPFile {
   public:
-    PCAPFile(const char *filename, const char *out_filename, const std::vector<std::string> &ips,
-             uint16_t port, const std::vector<Protocol> &protocols);
+    PCAPFile(const char *filename, const char *out_filename, OutMode out_mode,
+             const std::vector<std::string> &ips, uint16_t port,
+             const std::vector<Protocol> &protocols);
 
     ~PCAPFile();
-    int Next();
+    ssize_t Next();
 
   private:
+    ssize_t decode_packet(pcap_hdr_t *header, pcaprec_hdr_t *rec, uint8_t *buf,
+                          uint8_t *end, packet &packet);
+    ssize_t decode_ip_packet(pcaprec_hdr_t *rec, struct ip *ip, uint8_t *end,
+                             packet &packet);
+    ssize_t decode_tcp_packet(pcaprec_hdr_t *rec, struct ip *ip, uint8_t *end,
+                              packet &packet);
+    ssize_t decode_udp_packet(pcaprec_hdr_t *rec, struct ip *ip, uint8_t *end,
+                              packet &packet);
+    char *process_message(packet &packet, size_t size);
     int fd;
     FILE *fout;
+    OutMode out_mode;
     pcap_hdr_t header;
     pcaprec_hdr_t rec;
-    uint8_t buf[READ_BUF_SIZE];
     uint8_t wbuf[READ_BUF_SIZE];
 
     std::vector<std::string> ips;
     uint16_t port;
+    std::unordered_map<std::string, std::string> buf;
     bool tcp;
     bool udp;
 };

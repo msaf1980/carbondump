@@ -25,8 +25,6 @@
 #define ERRBUF_SIZE 1024
 static __thread char errbuf[ERRBUF_SIZE];
 
-OutMode out_mode;
-
 const char *strerror_t(int errcode) {
 #ifdef _GNU_SOURCE
     return strerror_r(errcode, errbuf, ERRBUF_SIZE);
@@ -107,55 +105,65 @@ static int print_ip_port(FILE *fout, pcaprec_hdr_t *rec, const char *proto,
     return 0;
 }
 
-static int decode_udp_packet(FILE *fout, pcaprec_hdr_t *rec, struct ip *ip,
-                             uint8_t *end, const std::vector<std::string> &ips,
-                             int port) {
+ssize_t PCAPFile::decode_udp_packet(pcaprec_hdr_t *rec, struct ip *ip,
+                                    uint8_t *end, packet &packet) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
     struct udphdr *udp = (struct udphdr *) ((uint8_t *) ip + sizeof(struct ip));
+#pragma GCC diagnostic pop
     uint16_t sport = ntohs(udp->uh_sport);
     uint16_t dport = ntohs(udp->uh_dport);
     std::string src = inet_ntoa(ip->ip_src);
     std::string dst = inet_ntoa(ip->ip_dst);
 
-    if (sport == port && std::find(ips.begin(), ips.end(), src) != ips.end()) {
-    } else if (dport == port &&
-               std::find(ips.begin(), ips.end(), dst) != ips.end()) {
-    } else {
+    if (!(sport == port &&
+          std::find(ips.begin(), ips.end(), src) != ips.end()) &&
+        !(dport == port &&
+          std::find(ips.begin(), ips.end(), dst) != ips.end())) {
         return 0;
     }
-
-    if (print_ip_port(fout, rec, "UDP", src, sport, dst, dport) < 0 ||
-        fprintf(fout, "\n") < 0) {
-        fprintf(stderr, "out write: %s\n", strerror_t(errno));
-        return -1;
+    if (out_mode == PACKET) {
+        if (print_ip_port(fout, rec, "UDP", src, sport, dst, dport) < 0 ||
+            fprintf(fout, "\n") < 0) {
+            fprintf(stderr, "out write: %s\n", strerror_t(errno));
+            return -1;
+        }
     }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
     uint8_t *payload = (uint8_t *) udp + sizeof(struct udphdr);
     ssize_t size_payload = ntohs(ip->ip_len) - sizeof(struct udphdr);
     if (payload + size_payload > end) {
         size_payload = end - payload;
     }
+
+    packet.udp = true;
+    packet.ts.tv_sec = rec->ts_sec;
+    packet.ts.tv_usec = rec->ts_usec;
+    packet.message = NULL;
     if (size_payload > 0) {
+        payload[size_payload] = '\0';
+        if (dport == port) {
+            packet.message = (char *) payload;
+        }
         if (out_mode == PACKET) {
-            payload[size_payload] = '\0';
-            if (fprintf(fout, "%s\n", payload) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-        } else if (dport == port) {
-            payload[size_payload] = '\0';
             if (fprintf(fout, "%s\n", payload) < 0) {
                 fprintf(stderr, "out write: %s\n", strerror_t(errno));
                 return -1;
             }
         }
     }
-    return 0;
+#pragma GCC diagnostic pop
+    return size_payload;
 }
 
-static int decode_tcp_packet(FILE *fout, pcaprec_hdr_t *rec, struct ip *ip,
-                             uint8_t *end, const std::vector<std::string> &ips,
-                             uint16_t port) {
+ssize_t PCAPFile::decode_tcp_packet(pcaprec_hdr_t *rec, struct ip *ip,
+                                    uint8_t *end, packet &packet) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
     struct tcphdr *tcp = (struct tcphdr *) ((uint8_t *) ip + sizeof(struct ip));
+#pragma GCC diagnostic pop
     uint16_t sport = ntohs(tcp->th_sport);
     uint16_t dport = ntohs(tcp->th_dport);
     std::string src = inet_ntoa(ip->ip_src);
@@ -171,9 +179,9 @@ static int decode_tcp_packet(FILE *fout, pcaprec_hdr_t *rec, struct ip *ip,
     if (out_mode == PACKET) {
         if (print_ip_port(fout, rec, "TCP", src, sport, dst, dport) < 0 ||
             fprintf(fout, " [") < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
+            fprintf(stderr, "out write: %s\n", strerror_t(errno));
+            return -1;
+        }
         int first = 1;
         if (tcp->syn) {
             if (print_flag(fout, "SYN", &first) < 0) {
@@ -215,85 +223,50 @@ static int decode_tcp_packet(FILE *fout, pcaprec_hdr_t *rec, struct ip *ip,
             fprintf(stderr, "out write: %s\n", strerror_t(errno));
             return -1;
         }
-    } else {
-        if (tcp->syn && tcp->ack_seq == 0) {
-            if (fprintf(fout, "#%u.%u", rec->ts_sec, rec->ts_usec) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-            if (fprintf(fout, " TCP %s:%d -> %s:%d CONNECT\n", src.c_str(),
-                        sport, dst.c_str(), dport) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-        } else if (tcp->fin && dport == port) {
-            if (fprintf(fout, "#%u.%u", rec->ts_sec, rec->ts_usec) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-            if (fprintf(fout, " TCP %s:%d -> %s:%d FIN\n", src.c_str(), sport,
-                        dst.c_str(), dport) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-        } else if (tcp->rst) {
-            if (fprintf(fout, "#%u.%u", rec->ts_sec, rec->ts_usec) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-            if (fprintf(fout, " TCP %s:%d -> %s:%d RST\n", src.c_str(), sport,
-                        dst.c_str(), dport) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-        }
     }
 
     uint16_t offset = tcp->doff * 4;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
     uint8_t *payload = (uint8_t *) tcp + offset;
     ssize_t size_payload = ntohs(ip->ip_len) - offset;
     if (payload + size_payload > end) {
         size_payload = end - payload;
     }
+
+    packet.udp = false;
+    packet.ts.tv_sec = rec->ts_sec;
+    packet.ts.tv_usec = rec->ts_usec;
+    packet.message = NULL;
     if (size_payload > 0) {
+        packet.src_dst = std::move(src) + ":" + std::to_string(sport) + " -> " +
+                         std::move(dst) + ":" + std::to_string(dport);
+        payload[size_payload] = '\0';
+        if (dport == port) {
+            packet.message = (char *) payload;
+        }
         if (out_mode == PACKET) {
-            payload[size_payload] = '\0';
-            if (fprintf(fout, "%s\n", payload) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-        } else if (dport == port) {
-            payload[size_payload] = '\0';
-            if (fprintf(fout, "#%u.%u", rec->ts_sec, rec->ts_usec) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-            if (fprintf(fout, " TCP %s:%d -> %s:%d SEND\n", src.c_str(), sport,
-                        dst.c_str(), dport) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
             if (fprintf(fout, "%s\n", payload) < 0) {
                 fprintf(stderr, "out write: %s\n", strerror_t(errno));
                 return -1;
             }
         }
     }
-    return 0;
+#pragma GCC diagnostic pop
+    return size_payload;
 }
 
-static int decode_ip_packet(FILE *fout, pcaprec_hdr_t *rec, struct ip *ip,
-                            uint8_t *end, const std::vector<std::string> &ips,
-                            uint16_t port, bool tcp, bool udp) {
+ssize_t PCAPFile::decode_ip_packet(pcaprec_hdr_t *rec, struct ip *ip,
+                                   uint8_t *end, packet &packet) {
     switch (ip->ip_p) {
     case IPPROTO_TCP:
         if (tcp) {
-            return decode_tcp_packet(fout, rec, ip, end, ips, port);
+            return decode_tcp_packet(rec, ip, end, packet);
         }
         break;
     case IPPROTO_UDP:
         if (udp) {
-            return decode_udp_packet(fout, rec, ip, end, ips, port);
+            return decode_udp_packet(rec, ip, end, packet);
         }
         break;
     }
@@ -301,17 +274,18 @@ static int decode_ip_packet(FILE *fout, pcaprec_hdr_t *rec, struct ip *ip,
     return 0;
 }
 
-static int decode_packet(FILE *fout, pcap_hdr_t *header, pcaprec_hdr_t *rec,
-                         uint8_t *buf, uint8_t *end,
-                         const std::vector<std::string> &ips, uint16_t port,
-                         bool tcp, bool udp) {
+ssize_t PCAPFile::decode_packet(pcap_hdr_t *header, pcaprec_hdr_t *rec,
+                                uint8_t *buf, uint8_t *end, packet &packet) {
     /* http://www.tcpdump.org/linktypes.html */
     switch (header->network) {
     case DLT_LINUX_SLL: {
         // struct sll_header *sll_header = (struct sll_header *) buf;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
         struct ip *ip =
             (struct ip *) ((uint8_t *) buf + sizeof(struct sll_header));
-        return decode_ip_packet(fout, rec, ip, end, ips, port, tcp, udp);
+#pragma GCC diagnostic pop
+        return decode_ip_packet(rec, ip, end, packet);
     } break;
     default:
         fprintf(stderr, "unnandled network type: %u\n", header->network);
@@ -320,26 +294,44 @@ static int decode_packet(FILE *fout, pcap_hdr_t *header, pcaprec_hdr_t *rec,
     return 0;
 }
 
-PCAPFile::~PCAPFile() {
-    if (fd) {
-        close(fd);
-        // free(wbuf);
-    }
+char *PCAPFile::process_message(packet &packet, size_t size) {
+    return nullptr;
 }
 
-int PCAPFile::Next() {
+ssize_t PCAPFile::Next() {
     ssize_t n;
     if ((n = read_record(fd, &rec, wbuf, header.snaplen)) == -1) {
         return -1;
     }
 
-    return decode_packet(fout, &header, &rec, wbuf, wbuf + n, ips, port, tcp,
-                         udp);
+    packet packet;
+    ssize_t size = decode_packet(&header, &rec, wbuf, wbuf + n, packet);
+    if (size > 0) {
+        char *end = strrchr(packet.message, '\n');
+        if (end) {
+            // std::string_view s(packet.message, end - packet.message + 1);
+            if (fprintf(fout, "#%ld.%ld", packet.ts.tv_sec, packet.ts.tv_usec) <
+                0) {
+                fprintf(stderr, "out write: %s\n", strerror_t(errno));
+                return -1;
+            }
+            if (fprintf(fout, " TCP %s SEND\n", packet.src_dst.c_str()) < 0) {
+                fprintf(stderr, "out write: %s\n", strerror_t(errno));
+                return -1;
+            }
+            if (fprintf(fout, "%s\n", packet.message) < 0) {
+                fprintf(stderr, "out write: %s\n", strerror_t(errno));
+                return -1;
+            }
+        } else {
+        }
+    }
+    return size;
 }
 
 PCAPFile::PCAPFile(const char *filename, const char *out_filename,
-                   const std::vector<std::string> &ips, uint16_t port,
-                   const std::vector<Protocol> &protocols) {
+                   OutMode out_mode, const std::vector<std::string> &ips,
+                   uint16_t port, const std::vector<Protocol> &protocols) {
     // wbuf = NULL;
     fd = open(filename, O_RDONLY);
     if (fd == -1) {
@@ -347,11 +339,12 @@ PCAPFile::PCAPFile(const char *filename, const char *out_filename,
                                  std::string(strerror_t(errno)));
     }
     read_header(fd, &header, filename);
-    if (out_filename == NULL) {
+    this->out_mode = out_mode;
+    if (out_filename == nullptr) {
         fout = stdout;
     } else {
         fout = fopen(out_filename, "a");
-        if (fout == NULL) {
+        if (fout == nullptr) {
             throw std::runtime_error(std::string(out_filename) + ": " +
                                      std::string(strerror_t(errno)));
         }
@@ -378,5 +371,14 @@ PCAPFile::PCAPFile(const char *filename, const char *out_filename,
         if (i == UDP) {
             udp = true;
         }
+    }
+}
+
+PCAPFile::~PCAPFile() {
+    if (fd) {
+        close(fd);
+    }
+    if (fout != stdout) {
+        fclose(fout);
     }
 }
