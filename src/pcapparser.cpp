@@ -4,6 +4,7 @@
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -16,11 +17,14 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <pcap.h>
 #include <pcap/sll.h>
 
 #include <pcapparser.hpp>
+
+const char *type_names[] = {"OTHER", "CONNECT", "SEND", "CLOSE"};
 
 #define ERRBUF_SIZE 1024
 static __thread char errbuf[ERRBUF_SIZE];
@@ -50,6 +54,51 @@ static void read_header(int fd, pcap_hdr_t *header, const char *filename) {
         throw std::runtime_error(std::string(filename) +
                                  ": file type mismatch");
     }
+}
+
+/* Parse data array for graphite plain-text metric
+ * Incomplete string strored in buf, it's length in buflen
+ *  @ return 0 - on success, -1 on - failure
+ */
+ssize_t process_packet(char *data, size_t len, char *buf, size_t &buflen,
+                       size_t bufsize, std::vector<std::string> &result) {
+    char *p, *token;
+    size_t tlen;
+
+    data[len] = '\0';
+    p = data;
+    token = strchr(p, '\n');
+
+    while (token != NULL) {
+        std::string s;
+        s.reserve(token - data + buflen);
+        if (buflen > 0) {
+            s.append(buf, buflen);
+            buflen = 0;
+        }
+        s.append(p, token);
+        result.push_back(std::move(s));
+        p = token + 1;
+        token = strchr(p, '\n');
+    }
+
+    tlen = len - (p - data);
+    if (tlen > 0) {
+        /* incomplete, store to buffer */
+        if (tlen + buflen >= bufsize) {
+            /* overflow */
+            errno = ENOSPC;
+            return -1;
+        } else if (buflen == 0) {
+            strcpy(buf, p);
+            buflen = tlen;
+        } else {
+            strcat(buf, p);
+            buflen += tlen;
+        }
+    }
+
+    return 0;
 }
 
 static ssize_t read_record(int fd, pcaprec_hdr_t *rec, uint8_t *buf,
@@ -138,11 +187,14 @@ ssize_t PCAPFile::decode_udp_packet(pcaprec_hdr_t *rec, struct ip *ip,
         size_payload = end - payload;
     }
 
-    packet.udp = true;
+    packet.proto = UDP;
     packet.ts.tv_sec = rec->ts_sec;
     packet.ts.tv_usec = rec->ts_usec;
     packet.message = NULL;
+    packet.type = SEND;
     if (size_payload > 0) {
+        packet.src_dst = "UDP " + src + ":" + std::to_string(sport) + " -> " +
+                         dst + ":" + std::to_string(dport);
         payload[size_payload] = '\0';
         if (dport == port) {
             packet.message = (char *) payload;
@@ -234,13 +286,11 @@ ssize_t PCAPFile::decode_tcp_packet(pcaprec_hdr_t *rec, struct ip *ip,
         size_payload = end - payload;
     }
 
-    packet.udp = false;
+    packet.proto = TCP;
     packet.ts.tv_sec = rec->ts_sec;
     packet.ts.tv_usec = rec->ts_usec;
     packet.message = NULL;
     if (size_payload > 0) {
-        packet.src_dst = std::move(src) + ":" + std::to_string(sport) + " -> " +
-                         std::move(dst) + ":" + std::to_string(dport);
         payload[size_payload] = '\0';
         if (dport == port) {
             packet.message = (char *) payload;
@@ -252,6 +302,26 @@ ssize_t PCAPFile::decode_tcp_packet(pcaprec_hdr_t *rec, struct ip *ip,
             }
         }
     }
+
+    if (dport == port) {
+        if (tcp->syn) {
+            packet.type = CONNECT;
+        } else if (tcp->fin) {
+            packet.type = CLOSE;
+        } else if (size_payload > 0) {
+            packet.type = SEND;
+        } else {
+            packet.type = OTHER;
+        }
+    } else {
+        packet.type = OTHER;
+    }
+
+    if (packet.type != OTHER) {
+        packet.src_dst = "TCP " + src + ":" + std::to_string(sport) + " -> " +
+                         dst + ":" + std::to_string(dport);
+    }
+
 #pragma GCC diagnostic pop
     return size_payload;
 }
@@ -294,39 +364,55 @@ ssize_t PCAPFile::decode_packet(pcap_hdr_t *header, pcaprec_hdr_t *rec,
     return 0;
 }
 
-char *PCAPFile::process_message(packet &packet, size_t size) {
-    return nullptr;
-}
-
 ssize_t PCAPFile::Next() {
     ssize_t n;
     if ((n = read_record(fd, &rec, wbuf, header.snaplen)) == -1) {
         return -1;
     }
 
-    packet packet;
-    ssize_t size = decode_packet(&header, &rec, wbuf, wbuf + n, packet);
-    if (size > 0) {
-        char *end = strrchr(packet.message, '\n');
-        if (end) {
-            // std::string_view s(packet.message, end - packet.message + 1);
+    if (out_mode == METRIC) {
+        packet packet;
+        ssize_t size = decode_packet(&header, &rec, wbuf, wbuf + n, packet);
+        if (size > 0) {
+            std::vector<std::string> result;
+            auto &b = buf[packet.src_dst];
+
+            if (process_packet(packet.message, size, b.buf, b.len,
+                               sizeof(b.buf), result) == 0 &&
+                result.size() > 0) {
+                if (fprintf(fout, "#%ld.%ld", packet.ts.tv_sec,
+                            packet.ts.tv_usec) < 0) {
+                    fprintf(stderr, "out write: %s\n", strerror_t(errno));
+                    return -1;
+                }
+                if (fprintf(fout, " %s %s\n", packet.src_dst.c_str(),
+                            type_names[packet.type]) < 0) {
+                    fprintf(stderr, "out write: %s\n", strerror_t(errno));
+                    return -1;
+                }
+                for (const auto &v : result) {
+                    if (fprintf(fout, "%s\n", v.c_str()) < 0) {
+                        fprintf(stderr, "out write: %s\n", strerror_t(errno));
+                        return -1;
+                    }
+                }
+            }
+        } else if (packet.type != OTHER) {
             if (fprintf(fout, "#%ld.%ld", packet.ts.tv_sec, packet.ts.tv_usec) <
                 0) {
                 fprintf(stderr, "out write: %s\n", strerror_t(errno));
                 return -1;
             }
-            if (fprintf(fout, " TCP %s SEND\n", packet.src_dst.c_str()) < 0) {
+            if (fprintf(fout, " %s %s\n", packet.src_dst.c_str(),
+                        type_names[packet.type]) < 0) {
                 fprintf(stderr, "out write: %s\n", strerror_t(errno));
                 return -1;
             }
-            if (fprintf(fout, "%s\n", packet.message) < 0) {
-                fprintf(stderr, "out write: %s\n", strerror_t(errno));
-                return -1;
-            }
-        } else {
         }
+        return size;
     }
-    return size;
+
+    return 0;
 }
 
 PCAPFile::PCAPFile(const char *filename, const char *out_filename,

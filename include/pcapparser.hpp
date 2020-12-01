@@ -4,12 +4,16 @@
 #include <stdio.h>
 
 #include <string>
-#include <unordered_map>
+#include <map>
 #include <vector>
 
 enum Protocol { TCP = 0, UDP };
 
 enum OutMode { PACKET = 0, METRIC = 1 };
+
+
+/* must be in sync with type_names */
+enum Type { OTHER = 0, CONNECT = 1, SEND = 2, CLOSE = 3 };
 
 #define READ_BUF_SIZE 65572
 
@@ -32,11 +36,17 @@ typedef struct pcaprec_hdr_s {
 } pcaprec_hdr_t;
 
 typedef struct {
-    bool udp;
+    Protocol proto;
+    Type type;
+    std::string src_dst;
     struct timeval ts;
     char *message;
-    std::string src_dst;
 } packet;
+
+typedef struct {
+  size_t len;
+  char buf[4096];
+} buffer;
 
 class PCAPFile {
   public:
@@ -56,7 +66,6 @@ class PCAPFile {
                               packet &packet);
     ssize_t decode_udp_packet(pcaprec_hdr_t *rec, struct ip *ip, uint8_t *end,
                               packet &packet);
-    char *process_message(packet &packet, size_t size);
     int fd;
     FILE *fout;
     OutMode out_mode;
@@ -66,7 +75,7 @@ class PCAPFile {
 
     std::vector<std::string> ips;
     uint16_t port;
-    std::unordered_map<std::string, std::string> buf;
+    std::map<std::string, buffer> buf; // buffers for incomplete metrics
     bool tcp;
     bool udp;
 };
