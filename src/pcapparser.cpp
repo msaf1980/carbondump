@@ -123,6 +123,19 @@ static ssize_t read_record(int fd, pcaprec_hdr_t *rec, uint8_t *buf,
     return r;
 }
 
+bool ip_find(const std::string &ip, const std::unordered_set<std::string> &ips,
+             const std::vector<std::regex> &ips_regex) {
+    if (ips.find(ip) != ips.end()) {
+        return true;
+    }
+    for (const auto &r : ips_regex) {
+        if (std::regex_search(ip, r)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static inline int print_flag(FILE *fout, const char *flag, int *first) {
     if (*first) {
         *first = 0;
@@ -165,10 +178,9 @@ ssize_t PCAPFile::decode_udp_packet(pcaprec_hdr_t *rec, struct ip *ip,
     std::string src = inet_ntoa(ip->ip_src);
     std::string dst = inet_ntoa(ip->ip_dst);
 
-    if (!(sport == port &&
-          std::find(ips.begin(), ips.end(), src) != ips.end()) &&
+    if (!(sport == port && ip_find(src, ips, ips_regex)) &&
         !(dport == port &&
-          std::find(ips.begin(), ips.end(), dst) != ips.end())) {
+          ip_find(dst, ips, ips_regex))) {
         return 0;
     }
     if (out_mode == PACKET) {
@@ -221,9 +233,8 @@ ssize_t PCAPFile::decode_tcp_packet(pcaprec_hdr_t *rec, struct ip *ip,
     std::string src = inet_ntoa(ip->ip_src);
     std::string dst = inet_ntoa(ip->ip_dst);
 
-    if (sport == port && std::find(ips.begin(), ips.end(), src) != ips.end()) {
-    } else if (dport == port &&
-               std::find(ips.begin(), ips.end(), dst) != ips.end()) {
+    if (sport == port && ip_find(src, ips, ips_regex)) {
+    } else if (dport == port && ip_find(dst, ips, ips_regex)) {
     } else {
         return 0;
     }
@@ -373,7 +384,7 @@ ssize_t PCAPFile::Next() {
     if (out_mode == METRIC) {
         packet packet;
         ssize_t size = decode_packet(&header, &rec, wbuf, wbuf + n, packet);
-        if (size > 0) {
+        if (packet.message) {
             std::vector<std::string> result;
             auto &b = buf[packet.src_dst];
 
@@ -417,7 +428,8 @@ ssize_t PCAPFile::Next() {
 
 PCAPFile::PCAPFile(const char *filename, const char *out_filename,
                    OutMode out_mode, const std::vector<std::string> &ips,
-                   uint16_t port, const std::vector<Protocol> &protocols) {
+                   const std::vector<std::string> &ips_regex, uint16_t port,
+                   const std::vector<Protocol> &protocols) {
     // wbuf = NULL;
     fd = open(filename, O_RDONLY);
     if (fd == -1) {
@@ -442,9 +454,12 @@ PCAPFile::PCAPFile(const char *filename, const char *out_filename,
                                  std::to_string(header.version_major) + "." +
                                  std::to_string(header.version_minor));
     }
-    this->ips = ips;
-    if (ips.size() > 1) {
-        std::sort(this->ips.begin(), this->ips.end());
+    for (const auto &i : ips) {
+        this->ips.insert(i);
+    }
+    this->ips_regex.reserve(ips_regex.size());
+    for (const auto &i : ips_regex) {
+        this->ips_regex.push_back(std::move(std::regex(i)));
     }
     this->port = port;
 

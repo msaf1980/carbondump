@@ -4,8 +4,9 @@
 #include <stdio.h>
 
 #include <string>
-#include <map>
+#include <unordered_set>
 #include <vector>
+#include <regex>
 
 enum Protocol { TCP = 0, UDP };
 
@@ -51,7 +52,7 @@ typedef struct {
 class PCAPFile {
   public:
     PCAPFile(const char *filename, const char *out_filename, OutMode out_mode,
-             const std::vector<std::string> &ips, uint16_t port,
+             const std::vector<std::string> &ips, const std::vector<std::string> &ips_regex, uint16_t port,
              const std::vector<Protocol> &protocols);
 
     ~PCAPFile();
@@ -73,7 +74,8 @@ class PCAPFile {
     pcaprec_hdr_t rec;
     uint8_t wbuf[READ_BUF_SIZE];
 
-    std::vector<std::string> ips;
+    std::unordered_set<std::string> ips;
+    std::vector<std::regex> ips_regex;
     uint16_t port;
     std::map<std::string, buffer> buf; // buffers for incomplete metrics
     bool tcp;
