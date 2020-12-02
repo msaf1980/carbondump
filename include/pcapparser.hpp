@@ -46,7 +46,7 @@ typedef struct {
 
 typedef struct {
   size_t len;
-  char buf[4096];
+  char buf[32768];
 } buffer;
 
 class PCAPFile {
