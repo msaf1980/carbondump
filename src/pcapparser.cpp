@@ -179,8 +179,7 @@ ssize_t PCAPFile::decode_udp_packet(pcaprec_hdr_t *rec, struct ip *ip,
     std::string dst = inet_ntoa(ip->ip_dst);
 
     if (!(sport == port && ip_find(src, ips, ips_regex)) &&
-        !(dport == port &&
-          ip_find(dst, ips, ips_regex))) {
+        !(dport == port && ip_find(dst, ips, ips_regex))) {
         return 0;
     }
     if (out_mode == PACKET) {
@@ -381,9 +380,9 @@ ssize_t PCAPFile::Next() {
         return -1;
     }
 
+    packet packet;
+    ssize_t size = decode_packet(&header, &rec, wbuf, wbuf + n, packet);
     if (out_mode == METRIC) {
-        packet packet;
-        ssize_t size = decode_packet(&header, &rec, wbuf, wbuf + n, packet);
         if (packet.message) {
             std::vector<std::string> result;
             auto &b = buf[packet.src_dst];
@@ -420,10 +419,9 @@ ssize_t PCAPFile::Next() {
                 return -1;
             }
         }
-        return size;
     }
 
-    return 0;
+    return size;
 }
 
 PCAPFile::PCAPFile(const char *filename, const char *out_filename,

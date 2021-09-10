@@ -19,3 +19,9 @@ CPMAddPackage(
   GITHUB_REPOSITORY catchorg/Catch2
   VERSION 2.13.2
  )
+
+ CPMAddPackage(
+  NAME strutils
+  GITHUB_REPOSITORY msaf1980/cppstrutils
+  VERSION 0.1.1
+ )

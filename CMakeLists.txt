@@ -41,6 +41,8 @@ foreach(cmakeFile ${cmakeFiles})
     include(${cmakeFile})
 endforeach(cmakeFile)
 
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake/find")
+
 if(DEFINED DIR_INCLUDES)
     # Includes in separate directory, also include dependecies headers
     include_directories(${DIR_INCLUDES} ${DEP_INSTALL_DIR}/include)
@@ -56,7 +58,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 foreach(dir IN LISTS SUB_DIRS)
     message("ADD ${dir}")
-    add_subdirectory(${dir})
+    add_subdirectory(${PROJECT_SOURCE_DIR}/${dir})
 endforeach()
 
 if(TEST)

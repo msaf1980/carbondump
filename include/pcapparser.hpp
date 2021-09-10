@@ -10,7 +10,7 @@
 
 enum Protocol { TCP = 0, UDP };
 
-enum OutMode { PACKET = 0, METRIC = 1 };
+enum OutMode { METRIC = 0,  PACKET = 1 };
 
 
 /* must be in sync with type_names */

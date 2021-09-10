@@ -1,11 +1,14 @@
 set(MAIN_TARGET ${PROJECT})
 
-find_package(PkgConfig)
+#find_package(PkgConfig)
 
-pkg_check_modules(PCAP REQUIRED libpcap)
+#pkg_check_modules(PCAP REQUIRED libpcap)
+
+find_package(PCAP REQUIRED)
 
 set(MAIN_SOURCES)
-set(MAIN_LIBRARIES pcap)
+#set(MAIN_LIBRARIES pcap)
+set(MAIN_LIBRARIES ${PCAP_LIBRARY})
 set(MAIN_INCLUDES "${CLI11_SOURCE_DIR}/include")
 
 # Scan dir for standart source files
